@@ -3,20 +3,29 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: AI Agent Chat API - OpenClaw + Hermes features
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: sessions
+    description: Chat session management
+  - name: messages
+    description: Message operations
+  - name: memory
+    description: Agent memory system
+  - name: skills
+    description: Agent skills management
+  - name: tools
+    description: Agent tools
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +33,287 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: List all chat sessions
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+    post:
+      operationId: createSession
+      tags: [sessions]
+      summary: Create a new chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionInput"
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
+  /sessions/{id}:
+    get:
+      operationId: getSession
+      tags: [sessions]
+      summary: Get a session by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteSession
+      tags: [sessions]
+      summary: Delete a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+    patch:
+      operationId: updateSession
+      tags: [sessions]
+      summary: Update session title
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
+  /sessions/{id}/messages:
+    get:
+      operationId: listMessages
+      tags: [messages]
+      summary: List messages in a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Message"
+
+  /sessions/{id}/chat:
+    post:
+      operationId: sendMessage
+      tags: [messages]
+      summary: Send a message and get streaming response
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageInput"
+      responses:
+        "200":
+          description: Streaming response (SSE)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /sessions/{id}/clear:
+    post:
+      operationId: clearSession
+      tags: [sessions]
+      summary: Clear all messages in a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /memory:
+    get:
+      operationId: listMemory
+      tags: [memory]
+      summary: Get all memory entries
+      responses:
+        "200":
+          description: Memory entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MemoryEntry"
+    post:
+      operationId: createMemory
+      tags: [memory]
+      summary: Create a memory entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryEntry"
+
+  /memory/{id}:
+    delete:
+      operationId: deleteMemory
+      tags: [memory]
+      summary: Delete a memory entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /skills:
+    get:
+      operationId: listSkills
+      tags: [skills]
+      summary: List all agent skills
+      responses:
+        "200":
+          description: Skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Skill"
+    post:
+      operationId: createSkill
+      tags: [skills]
+      summary: Create a new skill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skill"
+
+  /skills/{id}:
+    delete:
+      operationId: deleteSkill
+      tags: [skills]
+      summary: Delete a skill
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  /tools/run:
+    post:
+      operationId: runTool
+      tags: [tools]
+      summary: Execute an agent tool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolRunInput"
+      responses:
+        "200":
+          description: Tool result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolResult"
+
+  /agent/stats:
+    get:
+      operationId: getAgentStats
+      tags: [health]
+      summary: Get agent statistics
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStats"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +324,223 @@ components:
       required:
         - status
 
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        model:
+          type: string
+        channel:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        messageCount:
+          type: integer
+        lastMessage:
+          type: ["string", "null"]
+      required:
+        - id
+        - title
+        - model
+        - channel
+        - createdAt
+        - updatedAt
+        - messageCount
+
+    SessionInput:
+      type: object
+      properties:
+        title:
+          type: string
+        model:
+          type: string
+        systemPrompt:
+          type: string
+      required:
+        - title
+
+    SessionUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+        systemPrompt:
+          type: string
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        sessionId:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        toolName:
+          type: ["string", "null"]
+        toolResult:
+          type: ["string", "null"]
+        tokens:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - sessionId
+        - role
+        - content
+        - createdAt
+
+    MessageInput:
+      type: object
+      properties:
+        content:
+          type: string
+        model:
+          type: string
+        stream:
+          type: boolean
+      required:
+        - content
+
+    MemoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        value:
+          type: string
+        category:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - key
+        - value
+        - category
+        - createdAt
+        - updatedAt
+
+    MemoryInput:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+        category:
+          type: string
+      required:
+        - key
+        - value
+        - category
+
+    Skill:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        content:
+          type: string
+        usageCount:
+          type: integer
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - name
+        - description
+        - content
+        - usageCount
+        - createdAt
+        - updatedAt
+
+    SkillInput:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        content:
+          type: string
+      required:
+        - name
+        - description
+        - content
+
+    ToolRunInput:
+      type: object
+      properties:
+        tool:
+          type: string
+        params:
+          type: object
+      required:
+        - tool
+        - params
+
+    ToolResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        result:
+          type: string
+        error:
+          type: ["string", "null"]
+      required:
+        - success
+        - result
+
+    AgentStats:
+      type: object
+      properties:
+        totalSessions:
+          type: integer
+        totalMessages:
+          type: integer
+        totalMemoryEntries:
+          type: integer
+        totalSkills:
+          type: integer
+        telegramConnected:
+          type: boolean
+        uptime:
+          type: integer
+      required:
+        - totalSessions
+        - totalMessages
+        - totalMemoryEntries
+        - totalSkills
+        - telegramConnected
+        - uptime
