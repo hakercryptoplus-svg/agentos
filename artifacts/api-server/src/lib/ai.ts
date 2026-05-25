@@ -1,3 +1,8 @@
+/**
+ * AI Client — OpenClaw style
+ * Supports: text chat, streaming, vision (image analysis)
+ */
+
 import { logger } from "./logger.js";
 
 const AI_API_URL = "https://claude-gemma-deploy--mraboodaihakerd.replit.app/api/v1/chat/completions";
@@ -6,14 +11,20 @@ const DEFAULT_MODEL = "claude-opus-4-7";
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | ContentBlock[];
 }
+
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
 
 export interface StreamChunk {
   type: "delta" | "done" | "error";
   content?: string;
   error?: string;
 }
+
+// ─── Streaming Chat ────────────────────────────────────────────
 
 export async function streamChat(
   messages: ChatMessage[],
@@ -29,16 +40,12 @@ export async function streamChat(
         "Content-Type": "application/json",
         Authorization: `Bearer ${AI_API_KEY}`,
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-      }),
+      body: JSON.stringify({ model, messages, stream: true }),
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`AI API error ${response.status}: ${errText}`);
+      throw new Error(`AI API ${response.status}: ${errText}`);
     }
 
     const reader = response.body?.getReader();
@@ -59,10 +66,7 @@ export async function streamChat(
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
-        if (data === "[DONE]") {
-          onChunk({ type: "done" });
-          continue;
-        }
+        if (data === "[DONE]") { onChunk({ type: "done" }); continue; }
         try {
           const parsed = JSON.parse(data);
           const delta = parsed?.choices?.[0]?.delta?.content;
@@ -70,9 +74,7 @@ export async function streamChat(
             fullContent += delta;
             onChunk({ type: "delta", content: delta });
           }
-        } catch {
-          // ignore parse errors for non-JSON lines
-        }
+        } catch { /* ignore */ }
       }
     }
   } catch (err) {
@@ -83,15 +85,94 @@ export async function streamChat(
   return fullContent;
 }
 
+// ─── One-shot Chat ─────────────────────────────────────────────
+
 export async function chatOnce(
   messages: ChatMessage[],
   model: string = DEFAULT_MODEL
 ): Promise<string> {
   let result = "";
   await streamChat(messages, model, (chunk) => {
-    if (chunk.type === "delta" && chunk.content) {
-      result += chunk.content;
-    }
+    if (chunk.type === "delta" && chunk.content) result += chunk.content;
   });
   return result;
+}
+
+// ─── Vision Chat (Image Analysis) ─────────────────────────────
+
+export async function chatWithVision(
+  imageBase64: string,
+  mimeType: string,
+  question: string,
+  model: string = DEFAULT_MODEL
+): Promise<string> {
+  // Build multimodal message
+  const messages: ChatMessage[] = [
+    {
+      role: "user",
+      content: [
+        {
+          type: "image_url",
+          image_url: { url: `data:${mimeType};base64,${imageBase64}` },
+        },
+        {
+          type: "text",
+          text: question,
+        },
+      ],
+    },
+  ];
+
+  try {
+    const response = await fetch(AI_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${AI_API_KEY}`,
+      },
+      body: JSON.stringify({ model, messages, stream: false }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      // Fallback: if vision not supported, return a helpful message
+      logger.warn({ status: response.status }, "Vision API failed, using fallback");
+      return `[تعذّر تحليل الصورة عبر Vision API — الخطأ: ${response.status}. تأكد من دعم النموذج للصور.]`;
+    }
+
+    const data = await response.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return data.choices?.[0]?.message?.content ?? "[لا استجابة من النموذج]";
+  } catch (err) {
+    logger.error({ err }, "Vision chat error");
+    return `[خطأ في تحليل الصورة: ${String(err)}]`;
+  }
+}
+
+// ─── Non-streaming fallback ────────────────────────────────────
+
+export async function chatOnceDirect(
+  messages: ChatMessage[],
+  model: string = DEFAULT_MODEL
+): Promise<string> {
+  try {
+    const response = await fetch(AI_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${AI_API_KEY}`,
+      },
+      body: JSON.stringify({ model, messages, stream: false }),
+    });
+
+    if (!response.ok) throw new Error(`${response.status}`);
+    const data = await response.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return data.choices?.[0]?.message?.content ?? "";
+  } catch (err) {
+    logger.error({ err }, "Direct chat error");
+    return "";
+  }
 }
