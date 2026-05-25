@@ -72,7 +72,7 @@ router.post("/sessions", async (req, res) => {
 router.get("/sessions/:id", async (req, res) => {
   const { id } = req.params;
   const [row] = await db.select().from(sessionsTable).where(eq(sessionsTable.id, id)).limit(1);
-  if (!row) return res.status(404).json({ error: "Session not found" });
+  if (!row) { res.status(404).json({ error: "Session not found" }); return; }
 
   const [msgCount] = await db
     .select({ count: count() })
@@ -103,7 +103,7 @@ router.patch("/sessions/:id", async (req, res) => {
     .where(eq(sessionsTable.id, id))
     .returning();
 
-  if (!row) return res.status(404).json({ error: "Session not found" });
+  if (!row) { res.status(404).json({ error: "Session not found" }); return; }
 
   res.json({
     ...row,
@@ -148,7 +148,8 @@ router.post("/sessions/:id/chat", async (req, res) => {
   };
 
   if (!content?.trim()) {
-    return res.status(400).json({ error: "content is required" });
+    res.status(400).json({ error: "content is required" });
+    return;
   }
 
   const [session] = await db
@@ -157,7 +158,7 @@ router.post("/sessions/:id/chat", async (req, res) => {
     .where(eq(sessionsTable.id, id))
     .limit(1);
 
-  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (!session) { res.status(404).json({ error: "Session not found" }); return; }
 
   // Save user message
   const userMsgId = randomUUID();

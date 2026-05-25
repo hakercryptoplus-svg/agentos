@@ -21,7 +21,8 @@ router.post("/memory", async (req, res) => {
   const { key, value, category } = req.body as { key: string; value: string; category: string };
 
   if (!key || !value || !category) {
-    return res.status(400).json({ error: "key, value, and category are required" });
+    res.status(400).json({ error: "key, value, and category are required" });
+    return;
   }
 
   // Check if key already exists — update if so
@@ -33,11 +34,12 @@ router.post("/memory", async (req, res) => {
       .set({ value, category, updatedAt: new Date() })
       .where(eq(memoryTable.key, key))
       .returning();
-    return res.status(201).json({
+    res.status(201).json({
       ...updated,
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
     });
+    return;
   }
 
   const [row] = await db

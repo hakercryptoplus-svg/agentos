@@ -2,7 +2,6 @@ import { pgTable, text, integer, timestamp, boolean } from "drizzle-orm/pg-core"
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-// Sessions table
 export const sessionsTable = pgTable("sessions", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
@@ -17,11 +16,10 @@ export const insertSessionSchema = createInsertSchema(sessionsTable).omit({ crea
 export type InsertSession = z.infer<typeof insertSessionSchema>;
 export type Session = typeof sessionsTable.$inferSelect;
 
-// Messages table
 export const messagesTable = pgTable("messages", {
   id: text("id").primaryKey(),
   sessionId: text("session_id").notNull().references(() => sessionsTable.id, { onDelete: "cascade" }),
-  role: text("role").notNull(), // user | assistant | system | tool
+  role: text("role").notNull(),
   content: text("content").notNull(),
   toolName: text("tool_name"),
   toolResult: text("tool_result"),
@@ -33,12 +31,11 @@ export const insertMessageSchema = createInsertSchema(messagesTable).omit({ crea
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type Message = typeof messagesTable.$inferSelect;
 
-// Memory table (Hermes-style three-layer memory)
 export const memoryTable = pgTable("memory", {
   id: text("id").primaryKey(),
-  key: text("key").notNull(),
+  key: text("key").notNull().unique(),
   value: text("value").notNull(),
-  category: text("category").notNull().default("general"), // general | preference | skill | fact
+  category: text("category").notNull().default("general"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -47,12 +44,11 @@ export const insertMemorySchema = createInsertSchema(memoryTable).omit({ created
 export type InsertMemory = z.infer<typeof insertMemorySchema>;
 export type MemoryEntry = typeof memoryTable.$inferSelect;
 
-// Skills table (Hermes self-writing skills)
 export const skillsTable = pgTable("skills", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description").notNull(),
-  content: text("content").notNull(), // Markdown skill file
+  content: text("content").notNull(),
   usageCount: integer("usage_count").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -62,7 +58,6 @@ export const insertSkillSchema = createInsertSchema(skillsTable).omit({ createdA
 export type InsertSkill = z.infer<typeof insertSkillSchema>;
 export type Skill = typeof skillsTable.$inferSelect;
 
-// Telegram messages log
 export const telegramLogsTable = pgTable("telegram_logs", {
   id: text("id").primaryKey(),
   chatId: text("chat_id").notNull(),
@@ -75,3 +70,31 @@ export const telegramLogsTable = pgTable("telegram_logs", {
 });
 
 export type TelegramLog = typeof telegramLogsTable.$inferSelect;
+
+// Cron jobs table for autonomous scheduled tasks
+export const cronJobsTable = pgTable("cron_jobs", {
+  id: text("id").primaryKey(),
+  chatId: text("chat_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  cronExpr: text("cron_expr").notNull(), // e.g. "*/5 * * * *" or "delay:3600"
+  task: text("task").notNull(), // What to do / send
+  isActive: boolean("is_active").notNull().default(true),
+  runCount: integer("run_count").notNull().default(0),
+  lastRunAt: timestamp("last_run_at"),
+  nextRunAt: timestamp("next_run_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type CronJob = typeof cronJobsTable.$inferSelect;
+
+// Agent learning log
+export const learningLogTable = pgTable("learning_log", {
+  id: text("id").primaryKey(),
+  type: text("type").notNull(), // insight | skill | correction | milestone
+  content: text("content").notNull(),
+  source: text("source"), // session_id or "self"
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type LearningLog = typeof learningLogTable.$inferSelect;

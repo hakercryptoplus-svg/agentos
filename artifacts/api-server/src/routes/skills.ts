@@ -25,7 +25,8 @@ router.post("/skills", async (req, res) => {
   };
 
   if (!name || !description || !content) {
-    return res.status(400).json({ error: "name, description, and content are required" });
+    res.status(400).json({ error: "name, description, and content are required" });
+    return;
   }
 
   const [row] = await db
