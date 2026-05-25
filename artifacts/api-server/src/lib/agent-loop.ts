@@ -1,17 +1,19 @@
 /**
- * Agent Loop — OpenClaw + Hermes style
+ * OpenClaw Agent Loop — Professional Grade
  *
- * Flow:
- *  1. Build context (system prompt + memory + tools)
- *  2. Call AI → parse tool calls from response
- *  3. Execute tools, update display in real-time
- *  4. Feed results back → repeat until no more tools (max 5 iterations)
- *  5. Return final response
+ * Flow (OpenClaw style):
+ *  1. Build context: SOUL.md + AGENTS.md + USER.md + MEMORY.md + daily logs + skills
+ *  2. Inject MCP tool definitions
+ *  3. Call AI → parse <tool_call> blocks
+ *  4. Execute tools, stream progress updates in real-time via onProgress
+ *  5. Feed results back → repeat (max 8 iterations)
+ *  6. Extract insights + append daily log
+ *  7. Return final response
  */
 
 import { chatOnce } from "./ai.js";
-import { runTool } from "./tools.js";
-import { buildSystemPrompt } from "./memory-manager.js";
+import { runTool, MCP_TOOLS } from "./tools.js";
+import { buildSystemPrompt, extractAndSaveInsights } from "./memory-manager.js";
 import { logger } from "./logger.js";
 
 export type ProgressFn = (stage: AgentStage) => Promise<void>;
@@ -23,6 +25,7 @@ export interface AgentStage {
   toolParams?: string;
   toolResult?: string;
   iteration?: number;
+  toolsUsed?: string;
 }
 
 export interface AgentResult {
@@ -31,119 +34,129 @@ export interface AgentResult {
   iterations: number;
 }
 
-// Tool definitions injected into system prompt
-const TOOL_DEFINITIONS = `
-You have access to the following tools. Use them when needed by writing EXACTLY this format:
+// ─── MCP Tool Definitions (injected into system prompt) ────────
 
+function buildToolDefinitions(): string {
+  const defs = MCP_TOOLS.map((t) => {
+    const paramsDesc = Object.entries(t.params_schema)
+      .map(([k, v]) => `      ${k}${v.required ? " (مطلوب)" : ""}: ${v.description}`)
+      .join("\n");
+    return `### ${t.name} [${t.category}]\n${t.description}\n${paramsDesc ? `الباراميترات:\n${paramsDesc}` : "لا باراميترات"}`;
+  }).join("\n\n");
+
+  return `## أدوات MCP المتاحة
+
+استخدم الأدوات بكتابة:
+\`\`\`
 <tool_call>
-<name>TOOL_NAME</name>
+<name>اسم_الأداة</name>
 <params>{"key": "value"}</params>
 </tool_call>
+\`\`\`
 
-IMPORTANT: You can call multiple tools. After calling a tool, wait for the result before calling another.
+**قواعد مهمة:**
+- استخدم الأدوات فقط عند الحاجة لمعلومات حقيقية
+- اشرح ماذا ستفعل قبل استدعاء أي أداة
+- يمكنك استدعاء عدة أدوات تتالياً
+- بعد نتيجة الأداة: وضّح للمستخدم ما حدث
+- لا تخترع نتائج — استخدم الأدوات للحقائق
 
-Available tools:
+---
 
-1. web_search — Search the web for current information
-   params: {"query": "search query"}
+${defs}`;
+}
 
-2. fetch_url — Fetch and read a URL
-   params: {"url": "https://example.com"}
-
-3. calculate — Evaluate math expressions
-   params: {"expression": "2 + 2 * 10"}
-
-4. get_datetime — Get current date and time
-   params: {}
-
-5. system_info — Get real server/environment specs (CPU, RAM, OS)
-   params: {}
-
-6. memory_read — Read from persistent memory
-   params: {"key": "key_name"} or {} for all
-
-7. memory_write — Write to persistent memory
-   params: {"key": "key", "value": "value", "category": "general"}
-
-8. schedule_task — Schedule a recurring or one-time task
-   params: {"chatId": "ID", "name": "Task name", "task": "What to do", "cron": "every:3600"}
-
-9. list_tasks — List all scheduled tasks for a chat
-   params: {"chatId": "ID"}
-
-Rules:
-- Use tools when the user asks for real-time info, calculations, or actions
-- Always show your reasoning before calling a tool
-- After getting a tool result, explain it clearly to the user
-- You can call up to 5 tools per response
-`;
-
-const MAX_TOOL_ITERATIONS = 5;
+const MAX_ITERATIONS = 8;
 const TOOL_CALL_RE = /<tool_call>\s*<name>([\w_]+)<\/name>\s*<params>([\s\S]*?)<\/params>\s*<\/tool_call>/g;
+
+// ─── Main Agent Loop ───────────────────────────────────────────
 
 export async function runAgentLoop(params: {
   userMessage: string;
   chatId: string;
   history: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   model?: string;
+  imageBase64?: string;
+  imageMimeType?: string;
   onProgress: ProgressFn;
 }): Promise<AgentResult> {
-  const { userMessage, chatId, history, model = "claude-opus-4-7", onProgress } = params;
+  const {
+    userMessage,
+    chatId,
+    history,
+    model = "claude-opus-4-7",
+    imageBase64,
+    imageMimeType,
+    onProgress,
+  } = params;
 
   const toolsUsed: string[] = [];
   let iterations = 0;
 
-  // Build system prompt with memory
-  const memoryPrompt = await buildSystemPrompt(chatId);
-  const systemPrompt = `${memoryPrompt}\n\n---\n\n## أدوات الوكيل\n${TOOL_DEFINITIONS}`;
+  await onProgress({ type: "thinking", message: "⏳ أقرأ السياق..." });
 
-  // Build initial messages
-  const messages = [
-    { role: "system" as const, content: systemPrompt },
-    ...history,
-    { role: "user" as const, content: userMessage },
+  // Build full OpenClaw system prompt
+  const systemPrompt = await buildSystemPrompt(chatId);
+  const toolDefs = buildToolDefinitions();
+
+  // If image attached, trigger image analysis immediately
+  let enrichedMessage = userMessage;
+  if (imageBase64) {
+    await onProgress({ type: "tool_start", message: "🖼️ أحلل الصورة...", toolName: "image_analyze" });
+    const imageResult = await runTool("image_analyze", {
+      image_base64: imageBase64,
+      mime_type: imageMimeType ?? "image/jpeg",
+      question: userMessage || "صف ما تراه في هذه الصورة بالتفصيل",
+    });
+    toolsUsed.push("image_analyze");
+    if (imageResult.success) {
+      enrichedMessage = `[الصورة المرفقة — التحليل الأولي:]\n${imageResult.result}\n\n[سؤال المستخدم:] ${userMessage || "صف هذه الصورة"}`;
+      await onProgress({
+        type: "tool_result",
+        message: "✅ تحليل الصورة اكتمل",
+        toolName: "image_analyze",
+        toolResult: imageResult.result.slice(0, 300),
+      });
+    }
+  }
+
+  // Build messages
+  const messages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [
+    { role: "system", content: `${systemPrompt}\n\n---\n\n${toolDefs}` },
+    ...history.slice(-20), // Last 20 messages for context
+    { role: "user", content: enrichedMessage },
   ];
 
-  await onProgress({ type: "thinking", message: "أفكر في طلبك..." });
+  await onProgress({ type: "thinking", message: "💭 أفكر في الرد..." });
 
   let finalContent = "";
-  const toolResultsContext: string[] = [];
 
-  // Agent loop
-  while (iterations < MAX_TOOL_ITERATIONS) {
+  // ─── Agent Loop ───────────────────────────────────────────
+
+  while (iterations < MAX_ITERATIONS) {
     iterations++;
 
-    // Get AI response
+    // Call AI
     let aiResponse: string;
     try {
-      // Add tool results from previous iterations
-      const currentMessages = [...messages];
-      if (toolResultsContext.length > 0) {
-        currentMessages.push({
-          role: "assistant",
-          content: toolResultsContext.join("\n\n"),
-        });
-        currentMessages.push({
-          role: "user",
-          content: "استمر بناءً على نتائج الأدوات أعلاه.",
-        });
-      }
-
-      aiResponse = await chatOnce(currentMessages, model);
+      aiResponse = await chatOnce(messages, model);
     } catch (err) {
-      logger.error({ err }, "AI call failed in agent loop");
-      await onProgress({ type: "error", message: `خطأ في الاتصال بالذكاء الاصطناعي: ${String(err)}` });
-      return { content: "⚠️ حدث خطأ في الاتصال. حاول مرة أخرى.", toolsUsed, iterations };
+      logger.error({ err }, "AI call failed");
+      await onProgress({ type: "error", message: `خطأ في الاتصال: ${String(err)}` });
+      return { content: "⚠️ خطأ في الاتصال بالذكاء الاصطناعي. حاول مرة أخرى.", toolsUsed, iterations };
     }
 
-    // Parse tool calls
+    // Extract tool calls
     const toolCalls = extractToolCalls(aiResponse);
 
     if (toolCalls.length === 0) {
-      // No tools — this is the final response
+      // Final response — no more tool calls
       finalContent = aiResponse;
       break;
     }
+
+    // Add AI response to messages
+    messages.push({ role: "assistant", content: aiResponse });
 
     // Execute tools
     const toolResults: string[] = [];
@@ -151,7 +164,7 @@ export async function runAgentLoop(params: {
     for (const tc of toolCalls) {
       await onProgress({
         type: "tool_start",
-        message: `تنفيذ: ${tc.name}`,
+        message: `🔧 تنفيذ: **${tc.name}**`,
         toolName: tc.name,
         toolParams: JSON.stringify(tc.params, null, 2),
         iteration: iterations,
@@ -165,55 +178,57 @@ export async function runAgentLoop(params: {
         if (result.success) {
           await onProgress({
             type: "tool_result",
-            message: `نتيجة ${tc.name}`,
+            message: `✅ ${tc.name} اكتمل`,
             toolName: tc.name,
-            toolResult: result.result.slice(0, 800),
+            toolResult: result.result.slice(0, 600),
             iteration: iterations,
           });
-          toolResults.push(`[نتيجة ${tc.name}]:\n${result.result}`);
-          toolResultsContext.push(`الوكيل استخدم ${tc.name} وحصل على:\n${result.result}`);
+          toolResults.push(`<tool_result name="${tc.name}">\n${result.result}\n</tool_result>`);
         } else {
           await onProgress({
             type: "tool_error",
-            message: `فشل ${tc.name}: ${result.error}`,
+            message: `❌ ${tc.name}: ${result.error}`,
             toolName: tc.name,
             iteration: iterations,
           });
-          toolResults.push(`[خطأ في ${tc.name}]: ${result.error}`);
-          toolResultsContext.push(`الوكيل حاول ${tc.name} لكن فشل: ${result.error}`);
+          toolResults.push(`<tool_result name="${tc.name}" error="true">\n${result.error}\n</tool_result>`);
         }
       } catch (err) {
-        logger.error({ err, tool: tc.name }, "Tool execution error");
-        await onProgress({
-          type: "tool_error",
-          message: `خطأ في ${tc.name}: ${String(err)}`,
-          toolName: tc.name,
-        });
+        logger.error({ err, tool: tc.name }, "Tool error");
+        toolResults.push(`<tool_result name="${tc.name}" error="true">\n${String(err)}\n</tool_result>`);
       }
     }
 
-    // Add tool results back to messages for next iteration
-    messages.push({ role: "assistant", content: aiResponse });
+    // Feed results back
     messages.push({
       role: "user",
-      content: `نتائج الأدوات:\n${toolResults.join("\n\n")}\n\nالآن أجب على سؤال المستخدم بشكل كامل.`,
+      content: `نتائج الأدوات:\n${toolResults.join("\n\n")}\n\nالآن أكمل ردك النهائي للمستخدم.`,
     });
   }
 
-  // If we hit max iterations without a final response, generate one
+  // Fallback if hit max iterations
   if (!finalContent) {
-    await onProgress({ type: "thinking", message: "أجمع النتائج وأصيغ الإجابة..." });
+    await onProgress({ type: "thinking", message: "🔄 أصيغ الإجابة النهائية..." });
     try {
       finalContent = await chatOnce(messages, model);
     } catch {
-      finalContent = "تم تنفيذ العمليات المطلوبة. راجع النتائج أعلاه.";
+      finalContent = "✅ تمت العمليات المطلوبة. راجع التفاصيل أعلاه.";
     }
   }
 
-  await onProgress({ type: "done", message: "اكتمل", toolsUsed: toolsUsed.join(", ") } as AgentStage);
+  // Background: extract insights
+  extractAndSaveInsights(chatId, [...history, { role: "user", content: userMessage }]).catch(() => {});
+
+  await onProgress({
+    type: "done",
+    message: "✅ اكتمل",
+    toolsUsed: toolsUsed.join(", "),
+  });
 
   return { content: finalContent, toolsUsed, iterations };
 }
+
+// ─── Tool Call Parser ─────────────────────────────────────────
 
 interface ToolCall {
   name: string;
@@ -222,58 +237,41 @@ interface ToolCall {
 
 function extractToolCalls(text: string): ToolCall[] {
   const calls: ToolCall[] = [];
+  const re = /<tool_call>\s*<name>([\w_]+)<\/name>\s*<params>([\s\S]*?)<\/params>\s*<\/tool_call>/g;
   let match: RegExpExecArray | null;
 
-  // Reset regex
-  TOOL_CALL_RE.lastIndex = 0;
-
-  while ((match = TOOL_CALL_RE.exec(text)) !== null) {
+  while ((match = re.exec(text)) !== null) {
     const name = match[1].trim();
     const paramsRaw = match[2].trim();
-
     let params: Record<string, unknown> = {};
     try {
       params = JSON.parse(paramsRaw);
     } catch {
-      // Try to extract key-value pairs manually
-      const kv = paramsRaw.match(/"(\w+)":\s*"([^"]+)"/g);
-      if (kv) {
-        for (const pair of kv) {
-          const [k, v] = pair.split(":").map((s) => s.replace(/"/g, "").trim());
-          params[k] = v;
-        }
-      }
+      const pairs = paramsRaw.matchAll(/"(\w+)":\s*"([^"]*)"/g);
+      for (const [, k, v] of pairs) params[k] = v;
     }
-
     calls.push({ name, params });
   }
 
   return calls;
 }
 
-// SubAgent: spawn a focused agent for a sub-task
+// ─── Sub-Agent ────────────────────────────────────────────────
+
 export async function runSubAgent(params: {
   task: string;
   chatId: string;
   onProgress: ProgressFn;
 }): Promise<string> {
   const { task, chatId, onProgress } = params;
-
-  await onProgress({
-    type: "subagent",
-    message: `وكيل فرعي يعمل: ${task.slice(0, 50)}`,
-  });
+  await onProgress({ type: "subagent", message: `🤖 وكيل فرعي: ${task.slice(0, 60)}...` });
 
   const result = await runAgentLoop({
     userMessage: task,
     chatId,
     history: [],
     onProgress: async (stage) => {
-      // Prefix subagent progress
-      await onProgress({
-        ...stage,
-        message: `[وكيل فرعي] ${stage.message}`,
-      });
+      await onProgress({ ...stage, message: `[وكيل فرعي] ${stage.message}` });
     },
   });
 
